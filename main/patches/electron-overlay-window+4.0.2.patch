@@ -1,0 +1,82 @@
+diff --git a/node_modules/electron-overlay-window/prebuilds/linux-x64/electron-overlay-window.node b/node_modules/electron-overlay-window/prebuilds/linux-x64/electron-overlay-window.node
+index 7a4c801..81ddf87 100644
+Binary files a/node_modules/electron-overlay-window/prebuilds/linux-x64/electron-overlay-window.node and b/node_modules/electron-overlay-window/prebuilds/linux-x64/electron-overlay-window.node differ
+diff --git a/node_modules/electron-overlay-window/src/lib/addon.c b/node_modules/electron-overlay-window/src/lib/addon.c
+index 10ad0d8..8c3d254 100644
+--- a/node_modules/electron-overlay-window/src/lib/addon.c
++++ b/node_modules/electron-overlay-window/src/lib/addon.c
+@@ -212,7 +212,7 @@ napi_value AddonScreenshot(napi_env env, napi_callback_info info) {
+   napi_value img_buffer;
+   uint8_t* img_data;
+   size_t size = last_reported_bounds.width * last_reported_bounds.height * 4;
+-  status = napi_create_buffer(env, size, &img_data, &img_buffer);
++  status = napi_create_buffer(env, size, (void**)&img_data, &img_buffer);
+   NAPI_FATAL_IF_FAILED(status, "AddonScreenshot", "napi_create_buffer");
+ 
+ #ifdef _WIN32
+diff --git a/node_modules/electron-overlay-window/src/lib/x11.c b/node_modules/electron-overlay-window/src/lib/x11.c
+index 4929ba9..05c09ab 100644
+--- a/node_modules/electron-overlay-window/src/lib/x11.c
++++ b/node_modules/electron-overlay-window/src/lib/x11.c
+@@ -29,6 +29,13 @@ struct ow_overlay_window
+ 
+ static xcb_window_t active_window = XCB_WINDOW_NONE;
+ 
++// WAYLAND/KWIN PATCH: when KWin runs the whole Xwayland server at a global
++// scale (e.g. a mixed-DPI multi-monitor setup forces [Xwayland] Scale=1.7),
++// every X11 pixel coordinate is `scale` times the logical/DIP coordinate that
++// Electron's setBounds() expects. Divide reported window bounds by this factor
++// so the managed overlay lands exactly over the game. Default 1.0 (no-op).
++static double ow_overlay_scale = 1.0;
++
+ static struct ow_target_window target_info = {
+   .title = NULL,
+   .window_id = XCB_WINDOW_NONE,
+@@ -84,10 +91,10 @@ static bool get_content_bounds(xcb_window_t wid, struct ow_window_bounds* bounds
+     return false;
+   }
+ 
+-  bounds->x = translated->dst_x;
+-  bounds->y = translated->dst_y;
+-  bounds->width = geometry->width;
+-  bounds->height = geometry->height;
++  bounds->x = (int)(translated->dst_x / ow_overlay_scale);
++  bounds->y = (int)(translated->dst_y / ow_overlay_scale);
++  bounds->width = (int)(geometry->width / ow_overlay_scale);
++  bounds->height = (int)(geometry->height / ow_overlay_scale);
+   free(translated);
+   free(geometry);
+   return true;
+@@ -256,6 +263,12 @@ static void hook_proc(xcb_generic_event_t* generic_event) {
+ }
+ 
+ static void hook_thread(void* _arg) {
++  const char* scale_env = getenv("OW_OVERLAY_SCALE");
++  if (scale_env != NULL) {
++    double s = atof(scale_env);
++    if (s > 0.0) ow_overlay_scale = s;
++  }
++
+   x_conn = xcb_connect(NULL, NULL);
+   xcb_screen_t* screen = xcb_setup_roots_iterator(xcb_get_setup(x_conn)).data;
+   root = screen->root;
+@@ -280,8 +293,17 @@ static void hook_thread(void* _arg) {
+   if (overlay_info.window_id != XCB_WINDOW_NONE) {
+     // Electron window is created with `show: false`,
+     // this override-redirect is being set before window is mapped.
+-    uint32_t values[] = {1};
+-    xcb_change_window_attributes(x_conn, overlay_info.window_id, XCB_CW_OVERRIDE_REDIRECT, values);
++    //
++    // WAYLAND/KWIN PATCH: override-redirect windows are unmanaged; KWin-Wayland
++    // will not keep an unfocused Xwayland override-redirect window above the
++    // game. Setting OW_MANAGED_OVERLAY=1 leaves the overlay as a normal,
++    // WM-managed window so KWin honours the JS-side setAlwaysOnTop('screen-saver')
++    // + setBounds() + setIgnoreMouseEvents() (click-through). On a real X server
++    // leave this unset to keep the original override-redirect behaviour.
++    if (getenv("OW_MANAGED_OVERLAY") == NULL) {
++      uint32_t values[] = {1};
++      xcb_change_window_attributes(x_conn, overlay_info.window_id, XCB_CW_OVERRIDE_REDIRECT, values);
++    }
+   }
+ 
+   // listen for `_NET_ACTIVE_WINDOW` changes

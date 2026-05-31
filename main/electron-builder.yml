@@ -30,4 +30,4 @@ mac:
   x64ArchFiles: "*"
 appImage:
   executableArgs:
-    - "--sandbox"
+    - "--no-sandbox"
