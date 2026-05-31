@@ -17,6 +17,16 @@ import { HttpProxy } from "./proxy";
 import { installExtension, VUEJS_DEVTOOLS } from "electron-devtools-installer";
 import { FileWriter } from "./host-files/FileWriter";
 
+// WAYLAND/KWIN FIX: On KDE Plasma Wayland with a mixed-DPI multi-monitor setup,
+// KWin runs the whole Xwayland server at a single global scale, so every X11
+// pixel coordinate is `scale` times the logical coordinate Electron's
+// setBounds() expects. The patched electron-overlay-window divides reported
+// window bounds by OW_OVERLAY_SCALE so the price-check overlay lands over the
+// game. 1.7 matches this machine's [Xwayland] Scale; override via the env var.
+if (process.platform === "linux" && !process.env.OW_OVERLAY_SCALE) {
+  process.env.OW_OVERLAY_SCALE = "1.7";
+}
+
 if (!app.requestSingleInstanceLock()) {
   app.exit();
 }
